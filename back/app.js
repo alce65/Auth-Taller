@@ -2,7 +2,12 @@ import express from "express";
 import cors from "cors";
 // import bcrypt from "bcrypt";
 // import jwt from "jsonwebtoken";
-import { signService, hashService, compareService } from "./services/auth.js";
+import {
+  signService,
+  hashService,
+  compareService,
+  verifyService,
+} from "./services/auth.js";
 
 const MOCK_DATA = [
   {
@@ -26,15 +31,31 @@ app.use(express.json());
 app.use(cors());
 
 app.get("/users", (req, res) => {
-  MOCK_DATA.forEach((user) => {
-    delete user.passwd;
+  const auth = req.get("Authorization");
+  if (!auth || !auth.startsWith("Bearer ")) {
+    res.status(401);
+    res.json({ message: "Invalid authorization header" });
+    return;
+  }
+  const token = auth.split(" ")[1];
+  const decoded = verifyService(token);
+  if (!decoded) {
+    res.status(401);
+    res.json({ message: "Invalid token" });
+    return;
+  }
+  console.log(decoded);
+  const data = MOCK_DATA.map((user) => {
+    const userCopy = { ...user };
+    delete userCopy.passwd;
+    return userCopy;
   });
-  res.json(MOCK_DATA);
+  res.json(data);
 });
 
 app.get("/users/:id", (req, res) => {
   const { id } = req.params;
-  const user = MOCK_DATA.find((user) => user.id === Number(id));
+  const user = { ...MOCK_DATA.find((user) => user.id === Number(id)) };
   delete user.passwd;
   res.json(user);
 });
@@ -46,15 +67,42 @@ app.post("/users/register", (req, res) => {
     ...data,
     passwd: hashService(data.passwd),
   };
-  MOCK_DATA.push(newUser);
+  MOCK_DATA.push({ ...newUser });
   delete newUser.passwd;
   res.status(201);
   res.json(newUser);
 });
 
+const loginWithToken = (req, res) => {
+  const auth = req.get("Authorization");
+  if (!auth || !auth.startsWith("Bearer ")) {
+    res.status(401);
+    res.json({ message: "Invalid authorization header" });
+    return;
+  }
+  const token = auth.split(" ")[1];
+  const decoded = verifyService(token);
+  if (!decoded) {
+    res.status(401);
+    res.json({ message: "Invalid token" });
+    return;
+  }
+  console.log(decoded);
+  const user = MOCK_DATA.find((user) => user.id === decoded.id);
+  const resp = signService({ ...user });
+  return resp;
+};
+
 app.post("/users/login", (req, res) => {
+  if (req.get("Authorization")) {
+    const resp = loginWithToken(req, res);
+    res.json(resp);
+    return;
+  }
+
   const data = req.body;
   const user = MOCK_DATA.find((user) => user.email === data.email);
+  console.log("Finding user", user);
   if (user) {
     const isValid = compareService(data.passwd, user.passwd);
     if (isValid) {
@@ -63,7 +111,7 @@ app.post("/users/login", (req, res) => {
       //   id: user.id,
       // };
       // const token = jwt.sign(JSON.stringify(payload), SECRET);
-      const resp = signService(user);
+      const resp = signService({ ...user });
       res.json(resp);
     } else {
       res.status(401);
